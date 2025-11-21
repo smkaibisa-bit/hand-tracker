@@ -1,367 +1,208 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Hand Tracker — Mobile friendly</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hand Tracker - Modern UI + FPS (HTML Version)</title>
 
-  <!-- Tailwind (optional) -->
+  <!-- Tailwind CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- MediaPipe (CDN) -->
+  <!-- MediaPipe CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <style>
-    html,body { height:100%; }
-    body { margin:0; font-family:Inter, system-ui, -apple-system, sans-serif; background:linear-gradient(180deg,#f8fafc,#ffffff); }
-    .mirror { transform: scaleX(-1); }
-    video, canvas { width:100%; height:auto; display:block; }
-    #videoWrap { position:relative; background:#000; border-radius:12px; overflow:hidden; }
-    #overlay { position:absolute; left:0; top:0; pointer-events:none; }
+    video, canvas { transform: scaleX(-1); }
   </style>
 </head>
-<body class="p-4">
-  <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">
-    <div class="md:col-span-2">
-      <div id="videoWrap" class="rounded-lg">
-        <!-- playsinline is required for iOS so video doesn't fullscreen automatically -->
-        <video id="video" class="mirror" playsinline muted></video>
-        <canvas id="overlay" class="mirror"></canvas>
+<body class="bg-gradient-to-b from-gray-100 to-white min-h-screen p-6">
+  <div class="max-w-6xl mx-auto bg-white rounded-2xl shadow-xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
 
-        <div id="statusBox" style="position:absolute; left:10px; top:10px; background:rgba(255,255,255,0.85); padding:6px 10px; border-radius:8px; font-size:13px;">
-          <div style="font-weight:600">Status</div>
-          <div id="statusText" style="font-size:12px; color:#333">Idle</div>
-        </div>
+    <!-- Video + Canvas Area -->
+    <div class="md:col-span-2 relative bg-black rounded-xl overflow-hidden">
+      <video id="video" class="w-full h-auto bg-black" playsinline muted></video>
+      <canvas id="canvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+
+      <div id="statusBox" class="absolute top-4 left-4 bg-white/70 backdrop-blur px-3 py-2 rounded-lg text-sm">
+        <div class="font-medium">Status:</div>
+        <div id="statusText" class="text-xs">Idle</div>
       </div>
     </div>
 
-    <div class="p-3">
-      <div class="bg-white rounded-xl p-3 shadow-sm mb-3">
-        <div class="text-xs text-gray-500">Statistics</div>
-        <div class="flex justify-between items-center mt-2">
+    <!-- Controls -->
+    <div class="flex flex-col gap-4">
+
+      <div class="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-xl shadow-inner">
+        <div class="text-xs uppercase text-gray-500">Statistics</div>
+        <div class="flex justify-between mt-2">
           <div>
-            <div id="fingerCount" style="font-size:28px; font-weight:700">0</div>
-            <div class="text-xs text-gray-500">Total fingers</div>
+            <div id="fingerCount" class="text-2xl font-semibold">0</div>
+            <div class="text-xs text-gray-500">Total Fingers</div>
           </div>
           <div class="text-right">
-            <div id="handCount" style="font-size:28px; font-weight:700">0</div>
+            <div id="handCount" class="text-2xl font-semibold">0</div>
             <div class="text-xs text-gray-500">Hands</div>
           </div>
         </div>
-
-        <div class="mt-3 flex gap-2">
-          <div style="background:#f8fafc;padding:6px 10px;border-radius:8px">FPS: <span id="fps">0</span></div>
-          <div style="background:#f8fafc;padding:6px 10px;border-radius:8px">Running: <span id="running">No</span></div>
+        <div class="mt-3 flex gap-3">
+          <div class="px-3 py-2 bg-white shadow rounded-md">FPS: <span id="fpsDisplay">0</span></div>
         </div>
       </div>
 
-      <div class="bg-white rounded-xl p-3 shadow-sm mb-3">
-        <div class="space-y-2">
-          <label class="block text-xs text-gray-500">Upload video (fallback)</label>
-          <input id="fileInput" type="file" accept="video/*" />
-          <button id="startBtn" class="w-full bg-indigo-600 text-white py-2 rounded-md">Start Camera / Process Video</button>
-          <button id="stopBtn" class="w-full border border-gray-200 py-2 rounded-md">Stop</button>
-          <button id="shotBtn" class="w-full bg-emerald-600 text-white py-2 rounded-md">Save Screenshot</button>
-          <div class="text-xs text-gray-500 mt-2">Tips: Use HTTPS / open via GitHub Pages or localhost. On mobile, press Start to allow camera.</div>
-        </div>
+      <div class="p-4 bg-white border border-gray-200 rounded-xl flex flex-col gap-3">
+        <input type="file" id="videoFile" accept="video/*" class="text-sm" />
+
+        <button id="startBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg">Start Camera / Video</button>
+        <button id="stopBtn" class="w-full bg-white border border-gray-300 py-2 rounded-lg hover:bg-gray-50">Stop</button>
+        <button id="shotBtn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg">Save Screenshot</button>
+
+        <p class="text-xs text-gray-500">Tips: Gunakan Chrome atau browser lain. Jika kamera tidak bisa, unggah video sebagai alternatif.</p>
       </div>
 
-      <div class="text-xs text-gray-400">Built with MediaPipe Hands (CDN). Improved mobile support: facingMode (rear camera), playsinline, manual fallback loop.</div>
+      <p class="text-xs text-gray-400">MediaPipe Hands via CDN. Version: HTML Standalone.</p>
     </div>
   </div>
 
   <script>
-  (function(){
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
-    const statusText = document.getElementById('statusText');
-    const fingerCountEl = document.getElementById('fingerCount');
-    const handCountEl = document.getElementById('handCount');
-    const fpsEl = document.getElementById('fps');
-    const runningEl = document.getElementById('running');
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
 
-    const fileInput = document.getElementById('fileInput');
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const shotBtn = document.getElementById('shotBtn');
+    const statusText = document.getElementById("statusText");
+    const fingerCountEl = document.getElementById("fingerCount");
+    const handCountEl = document.getElementById("handCount");
+    const fpsDisplay = document.getElementById("fpsDisplay");
 
     let useVideoFile = false;
-    let stream = null;
-    let handsInstance = null;
-    let cameraUtil = null;
-    let manualLoopRAF = null;
     let fpsInterval = null;
-    let frameCount = 0;
-    let lastFpsTime = performance.now();
+    let lastTime = performance.now();
+    let frames = 0;
 
-    function setStatus(msg) {
+    function updateStatus(msg) {
       statusText.textContent = msg;
     }
-    function setRunning(r) {
-      runningEl.textContent = r ? 'Yes' : 'No';
-    }
 
-    // Finger counting heuristic
-    function countFingers(landmarks, handedness) {
-      // tips indices
-      const tips = [4,8,12,16,20];
-      let c = 0;
-      for (let i=1;i<=4;i++){
-        const tip = landmarks[tips[i]];
-        const pip = landmarks[tips[i]-2];
-        if (tip && pip && tip.y < pip.y) c++;
-      }
-      // thumb heuristic
-      const thumbTip = landmarks[4];
-      const thumbIp = landmarks[3];
-      if (thumbTip && thumbIp) {
-        if (handedness === 'Right') {
-          if (thumbTip.x < thumbIp.x - 0.02) c++;
-        } else if (handedness === 'Left') {
-          if (thumbTip.x > thumbIp.x + 0.02) c++;
-        } else {
-          if (Math.abs(thumbTip.x - thumbIp.x) > 0.04) c++;
-        }
-      }
-      return c;
-    }
-
-    // MediaPipe hands setup
-    function initHands() {
-      if (!window.Hands) throw new Error('MediaPipe Hands not loaded');
-      handsInstance = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-      handsInstance.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.5
-      });
-      handsInstance.onResults(onResults);
-    }
-
-    function onResults(results) {
-      // ensure overlay matches video size
-      const w = video.videoWidth || video.width || 640;
-      const h = video.videoHeight || video.height || 480;
-      overlay.width = w;
-      overlay.height = h;
-
-      ctx.clearRect(0,0,w,h);
-      if (results.image) ctx.drawImage(results.image, 0, 0, w, h);
-
-      let totalFingers = 0;
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
-        for (let i=0;i<results.multiHandLandmarks.length;i++){
-          const lm = results.multiHandLandmarks[i];
-          if (window.drawConnectors && window.drawLandmarks && window.HAND_CONNECTIONS) {
-            drawConnectors(ctx, lm, HAND_CONNECTIONS, { lineWidth:2 });
-            drawLandmarks(ctx, lm, { lineWidth:1 });
-          }
-          let handed = 'Unknown';
-          if (results.multiHandedness && results.multiHandedness[i]) handed = results.multiHandedness[i].label;
-          totalFingers += countFingers(lm, handed);
-          // label near wrist
-          const wrist = lm[0];
-          const x = wrist.x * w;
-          const y = wrist.y * h;
-          ctx.font = '14px sans-serif';
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.strokeStyle = 'black';
-          ctx.lineWidth = 3;
-          const txt = `${handed}: ${countFingers(lm, handed)}`;
-          ctx.strokeText(txt, x+6, y+6);
-          ctx.fillText(txt, x+6, y+6);
-        }
-        handCountEl.textContent = results.multiHandLandmarks.length;
-        setStatus(`Detected ${results.multiHandLandmarks.length} hand(s)`);
-      } else {
-        handCountEl.textContent = 0;
-        setStatus('No hands detected');
-      }
-      fingerCountEl.textContent = totalFingers;
-
-      // FPS counting
-      frameCount++;
-    }
-
-    // manual loop fallback: repeatedly send video frames to MediaPipe
-    async function startManualLoop(){
-      if (!handsInstance) initHands();
-      cancelManualLoop();
-      const loop = async () => {
-        if (video.paused || video.ended) {
-          manualLoopRAF = requestAnimationFrame(loop);
-          return;
-        }
-        try {
-          await handsInstance.send({ image: video });
-        } catch(e) { /* ignore frame errors */ }
-        manualLoopRAF = requestAnimationFrame(loop);
-      };
-      manualLoopRAF = requestAnimationFrame(loop);
-    }
-    function cancelManualLoop(){
-      if (manualLoopRAF) {
-        cancelAnimationFrame(manualLoopRAF);
-        manualLoopRAF = null;
-      }
-    }
-
-    function startFpsTimer(){
-      stopFpsTimer();
-      frameCount = 0;
-      lastFpsTime = performance.now();
-      fpsInterval = setInterval(()=>{
+    function startFPS() {
+      lastTime = performance.now();
+      frames = 0;
+      fpsInterval = setInterval(() => {
         const now = performance.now();
-        const elapsed = (now - lastFpsTime)/1000;
-        const fps = Math.round(frameCount / Math.max(0.001, elapsed));
-        fpsEl.textContent = fps;
-        lastFpsTime = now;
-        frameCount = 0;
+        const fps = frames / ((now - lastTime) / 1000);
+        fpsDisplay.textContent = Math.round(fps);
+        lastTime = now;
+        frames = 0;
       }, 800);
     }
-    function stopFpsTimer(){ if (fpsInterval){ clearInterval(fpsInterval); fpsInterval = null; } fpsEl.textContent = 0; }
 
-    // Start camera / video
-    async function start() {
-      try {
-        setRunning(false);
-        setStatus('Initializing...');
-        if (!handsInstance) initHands();
+    function stopFPS() {
+      clearInterval(fpsInterval);
+      fpsInterval = null;
+      fpsDisplay.textContent = 0;
+    }
 
-        // If user uploaded a file, use it instead of camera
-        if (useVideoFile && video.src && video.src.length) {
-          try {
-            await video.play();
-          } catch(err) { console.warn('video.play() error', err); }
-          startManualLoop();
-          startFpsTimer();
-          setRunning(true);
-          setStatus('Processing uploaded video');
-          return;
-        }
+    function countFingers(landmarks, hand) {
+      const tips = [4, 8, 12, 16, 20];
+      let count = 0;
 
-        // prefer rear camera on mobile but use 'ideal' for better compatibility
-        const constraints = {
-          audio: false,
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: { ideal: 'environment' }
-          }
-        };
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          setStatus('Browser does not support getUserMedia');
-          return;
-        }
-
-        // request camera
-        try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch(err) {
-          console.error('getUserMedia failed:', err);
-          if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
-            setStatus('Permission denied. Please allow camera access in browser settings.');
-          } else if (err && err.name === 'NotFoundError') {
-            setStatus('No camera found. Try uploading a video file.');
-          } else {
-            setStatus('Failed to access camera: ' + (err.message || err.name));
-          }
-          return;
-        }
-
-        video.srcObject = stream;
-        try { await video.play(); } catch(e){ console.warn('video.play failed', e); }
-
-        // Try MediaPipe Camera util first (may fail on some mobiles)
-        if (window.Camera) {
-          try {
-            cameraUtil = new Camera(video, {
-              onFrame: async () => {
-                if (!handsInstance) return;
-                try { await handsInstance.send({ image: video }); } catch(e){ /* ignore */ }
-              },
-              width: 1280,
-              height: 720
-            });
-            await cameraUtil.start();
-            setStatus('Camera running (util)');
-            startFpsTimer();
-            setRunning(true);
-            return;
-          } catch(e) {
-            console.warn('MediaPipe Camera util failed, fallback to manual loop', e);
-            // fallback to manual loop below
-          }
-        }
-
-        // fallback manual loop using video element
-        startManualLoop();
-        startFpsTimer();
-        setRunning(true);
-        setStatus('Camera running (manual fallback)');
-      } catch(err) {
-        console.error('Start error', err);
-        setStatus('Failed to start: ' + (err.message || String(err)));
+      for (let i = 1; i <= 4; i++) {
+        if (landmarks[tips[i]].y < landmarks[tips[i] - 2].y) count++;
       }
+
+      const thumbTip = landmarks[4];
+      const thumbIp = landmarks[3];
+      if (hand === "Right" && thumbTip.x < thumbIp.x) count++;
+      if (hand === "Left" && thumbTip.x > thumbIp.x) count++;
+
+      return count;
     }
 
-    // Stop & cleanup
-    function stop() {
-      setRunning(false);
-      setStatus('Stopping...');
-      // stop camera util
-      try { if (cameraUtil && cameraUtil.stop) cameraUtil.stop(); } catch(e){}
-      cameraUtil = null;
+    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1 });
 
-      // stop stream
-      try {
-        if (stream) {
-          stream.getTracks().forEach(t => t.stop());
-          stream = null;
-        }
-      } catch(e){}
+    hands.onResults(results => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-      cancelManualLoop();
-      stopFpsTimer();
+      let total = 0;
 
-      if (handsInstance) { try { handsInstance.onResults(null); } catch(e){} }
-      setStatus('Stopped');
-    }
+      if (results.multiHandLandmarks) {
+        results.multiHandLandmarks.forEach((lm, i) => {
+          drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
+          drawLandmarks(ctx, lm, { color: '#FF0000', lineWidth: 1 });
 
-    // File input handler
-    fileInput.addEventListener('change', (ev)=>{
-      const f = ev.target.files && ev.target.files[0];
-      if (!f) return;
-      useVideoFile = true;
-      // revoke old objectURL if any
-      try { if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src); } catch(e){}
-      video.srcObject = null;
-      video.src = URL.createObjectURL(f);
-      video.loop = true;
-      setStatus('Video uploaded — press Start');
+          const handLabel = results.multiHandedness[i].label;
+          total += countFingers(lm, handLabel);
+        });
+      }
+
+      handCountEl.textContent = results.multiHandLandmarks?.length || 0;
+      fingerCountEl.textContent = total;
+
+      frames++;
     });
+
+    // Start Button
+    document.getElementById("startBtn").onclick = async () => {
+      updateStatus("Starting...");
+
+      const file = document.getElementById("videoFile").files[0];
+      if (file) {
+        useVideoFile = true;
+        video.src = URL.createObjectURL(file);
+        video.loop = true;
+        await video.play();
+        updateStatus("Processing uploaded video...");
+        loop();
+        startFPS();
+        return;
+      }
+
+      useVideoFile = false;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        await video.play();
+        updateStatus("Camera running...");
+
+        const camera = new Camera(video, {
+          onFrame: async () => { await hands.send({ image: video }); },
+          width: 1280,
+          height: 720
+        });
+
+        await camera.start();
+        startFPS();
+      } catch (err) {
+        updateStatus("Camera error: " + err.message);
+      }
+    };
+
+    function loop() {
+      hands.send({ image: video });
+      requestAnimationFrame(loop);
+    }
+
+    // Stop Button
+    document.getElementById("stopBtn").onclick = () => {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      video.pause();
+      stopFPS();
+      updateStatus("Stopped");
+    };
 
     // Screenshot
-    shotBtn.addEventListener('click', ()=>{
-      // merge video frame and overlay canvas (overlay already has drawings)
-      // overlay is same size as video; just download overlay content (it contains background)
+    document.getElementById("shotBtn").onclick = () => {
       const link = document.createElement('a');
       link.download = `handtracker_${Date.now()}.png`;
-      link.href = overlay.toDataURL('image/png');
+      link.href = canvas.toDataURL('image/png');
       link.click();
-    });
-
-    startBtn.addEventListener('click', async ()=>{ await start(); });
-    stopBtn.addEventListener('click', stop);
-
-    // Initialize status
-    setStatus('Ready — press Start (mobile requires user gesture)');
-  })();
+    };
   </script>
 </body>
 </html>
+
