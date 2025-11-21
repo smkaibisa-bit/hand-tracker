@@ -144,7 +144,6 @@
       frames++;
     });
 
-    // Start Button
     document.getElementById("startBtn").onclick = async () => {
       updateStatus("Starting...");
 
@@ -162,7 +161,17 @@
 
       useVideoFile = false;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const constraints = {
+          video: {
+            facingMode: { ideal: "user" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
         video.srcObject = stream;
         await video.play();
         updateStatus("Camera running...");
@@ -185,7 +194,6 @@
       requestAnimationFrame(loop);
     }
 
-    // Stop Button
     document.getElementById("stopBtn").onclick = () => {
       if (video.srcObject) {
         video.srcObject.getTracks().forEach(t => t.stop());
@@ -195,7 +203,6 @@
       updateStatus("Stopped");
     };
 
-    // Screenshot
     document.getElementById("shotBtn").onclick = () => {
       const link = document.createElement('a');
       link.download = `handtracker_${Date.now()}.png`;
@@ -205,4 +212,3 @@
   </script>
 </body>
 </html>
-
