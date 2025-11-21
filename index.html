@@ -1,485 +1,207 @@
-import React, { useEffect, useRef, useState } from "react";
-
-// HandTracker React component (fixed)
-// - Improved error handling when camera permission is denied
-// - Checks permissions (when supported) before attempting to start
-// - Provides a fallback: upload a local video file to test the detector when camera isn't available
-// - Starts FPS only after camera/video feed is running
-// - Keeps MediaPipe usage via CDN (dynamically loaded)
-
-export default function HandTrackerApp() {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const handsRef = useRef(null);
-  const cameraRef = useRef(null);
-  const streamRef = useRef(null); // store MediaStream if we create it
-  const rafRef = useRef(null); // requestAnimationFrame id for manual loop fallback
-
-  const [status, setStatus] = useState("Idle");
-  const [fingerCount, setFingerCount] = useState(0);
-  const [handCount, setHandCount] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [fps, setFps] = useState(0);
-  const [useVideoFile, setUseVideoFile] = useState(false);
-
-  // FPS calc helpers
-  const lastFpsTimeRef = useRef(performance.now());
-  const frameCounterRef = useRef(0);
-  const fpsTimerRef = useRef(null);
-
-  // Dynamically load MediaPipe scripts (only once)
-  useEffect(() => {
-    let cancelled = false;
-    async function loadMPScripts() {
-      if (window.Hands && window.drawConnectors) return;
-
-      const scripts = [
-        "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js",
-        "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js",
-        "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js",
-      ];
-
-      for (const src of scripts) {
-        if (cancelled) return;
-        await new Promise((res, rej) => {
-          const s = document.createElement("script");
-          s.src = src;
-          s.async = true;
-          s.onload = res;
-          s.onerror = () => rej(new Error(`Failed to load ${src}`));
-          document.body.appendChild(s);
-        });
-      }
-    }
-
-    loadMPScripts().catch((err) => {
-      console.error("Failed to load MediaPipe scripts:", err);
-      setStatus("Failed to load ML scripts");
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Helper to count fingers from landmarks (same heuristic as plain JS)
-  function countFingersFromLandmarks(landmarks, handedness) {
-    const tips = [4, 8, 12, 16, 20];
-    let count = 0;
-
-    // index..pinky: tip.y < pip.y
-    for (let i = 1; i <= 4; i++) {
-      const tip = landmarks[tips[i]];
-      const pip = landmarks[tips[i] - 2];
-      if (tip && pip && tip.y < pip.y) count += 1;
-    }
-
-    // thumb heuristic based on handedness
-    const thumbTip = landmarks[4];
-    const thumbIp = landmarks[3];
-    if (thumbTip && thumbIp) {
-      if (handedness === "Right") {
-        if (thumbTip.x < thumbIp.x - 0.02) count += 1;
-      } else if (handedness === "Left") {
-        if (thumbTip.x > thumbIp.x + 0.02) count += 1;
-      } else {
-        if (Math.abs(thumbTip.x - thumbIp.x) > 0.04) count += 1;
-      }
-    }
-
-    return count;
-  }
-
-  // onResults callback: draw landmarks and update counters + fps
-  function onResults(results) {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!canvas || !video) return;
-
-    const ctx = canvas.getContext("2d");
-    canvas.width = video.videoWidth || video.width || 640;
-    canvas.height = video.videoHeight || video.height || 480;
-
-    ctx.save();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // draw image as background (subtle)
-    if (results.image) ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-    let totalFingers = 0;
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length) {
-      for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-        const landmarks = results.multiHandLandmarks[i];
-        // draw landmarks and connectors (guard window functions)
-        if (window.drawConnectors && window.HAND_CONNECTIONS) {
-          window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, { lineWidth: 2 });
-          window.drawLandmarks(ctx, landmarks, { lineWidth: 1 });
-        }
-
-        // handedness label
-        let handedness = "Unknown";
-        if (results.multiHandedness && results.multiHandedness[i]) {
-          handedness = results.multiHandedness[i].label;
-        }
-
-        const fingers = countFingersFromLandmarks(landmarks, handedness);
-        totalFingers += fingers;
-
-        // show label near wrist
-        const wrist = landmarks[0];
-        const x = wrist.x * canvas.width;
-        const y = wrist.y * canvas.height;
-        ctx.font = "18px Inter, Arial";
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillText(`${handedness}: ${fingers}`, x + 8, y + 8);
-      }
-      setHandCount(results.multiHandLandmarks.length);
-      setStatus(`Detected ${results.multiHandLandmarks.length} hand(s)`);
-    } else {
-      setHandCount(0);
-      setStatus("No hand detected");
-    }
-
-    setFingerCount(totalFingers);
-    ctx.restore();
-
-    // FPS counting
-    frameCounterRef.current += 1;
-  }
-
-  // Safe helper: check camera permission if browser supports Permissions API
-  async function checkCameraPermission() {
-    try {
-      if (!navigator.permissions || !navigator.permissions.query) return null;
-      const status = await navigator.permissions.query({ name: "camera" });
-      return status.state; // 'granted', 'denied', or 'prompt'
-    } catch (err) {
-      return null; // can't determine
-    }
-  }
-
-  // Start FPS timer (only when feed is running)
-  function startFpsTimer() {
-    if (fpsTimerRef.current) return;
-    lastFpsTimeRef.current = performance.now();
-    frameCounterRef.current = 0;
-    fpsTimerRef.current = setInterval(() => {
-      const now = performance.now();
-      const elapsed = (now - lastFpsTimeRef.current) / 1000;
-      const frames = frameCounterRef.current;
-      const currentFps = frames / Math.max(0.001, elapsed);
-      setFps(Math.round(currentFps));
-      lastFpsTimeRef.current = now;
-      frameCounterRef.current = 0;
-    }, 800);
-  }
-
-  function stopFpsTimer() {
-    if (fpsTimerRef.current) {
-      clearInterval(fpsTimerRef.current);
-      fpsTimerRef.current = null;
-    }
-    setFps(0);
-  }
-
-  // Manual loop fallback: repeatedly send frames from a video element to MediaPipe
-  function startManualLoop() {
-    const loop = async () => {
-      if (!handsRef.current || !videoRef.current || videoRef.current.paused) {
-        rafRef.current = requestAnimationFrame(loop);
-        return;
-      }
-      try {
-        await handsRef.current.send({ image: videoRef.current });
-      } catch (err) {
-        // ignore individual frame errors
-      }
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    if (!rafRef.current) rafRef.current = requestAnimationFrame(loop);
-  }
-
-  function stopManualLoop() {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  }
-
-  // start the camera and mediapipe with robust error handling
-  async function start() {
-    if (isRunning) return;
-    if (!window.Hands) {
-      setStatus("ML scripts not loaded yet");
-      return;
-    }
-
-    setStatus("Checking permissions...");
-    const perm = await checkCameraPermission();
-
-    if (perm === "denied") {
-      setStatus("Camera permission is denied. Please allow camera in browser settings.");
-      return;
-    }
-
-    setStatus("Requesting camera... (if using uploaded video, press Start after choosing file)");
-
-    try {
-      const video = videoRef.current;
-
-      const hands = new window.Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-      hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
-      hands.onResults(onResults);
-      handsRef.current = hands;
-
-      // If user chose to supply a video file, don't request camera — just start manual loop after video plays
-      if (useVideoFile) {
-        if (!video.src || video.src === "") {
-          setStatus("Please upload a video file first (use the 'Upload video' button).");
-          return;
-        }
-
-        // ensure video is playing
-        try {
-          await video.play();
-        } catch (err) {
-          setStatus("Failed to play uploaded video: " + err.message);
-          return;
-        }
-
-        startManualLoop();
-        startFpsTimer();
-        setIsRunning(true);
-        setStatus("Processing uploaded video");
-        return;
-      }
-
-      // Normal camera flow: request getUserMedia ourselves so we can handle errors clearly
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setStatus("Browser does not support navigator.mediaDevices.getUserMedia");
-        return;
-      }
-
-      let stream = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-      } catch (err) {
-        // Permission denied or no device
-        console.error("getUserMedia error:", err);
-        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
-          setStatus("Permission denied for camera. Please allow camera access and/or use HTTPS/localhost.");
-        } else if (err && err.name === "NotFoundError") {
-          setStatus("No camera device found. Connect a camera or use an uploaded video file.");
-        } else {
-          setStatus("Failed to access camera: " + (err.message || err.name));
-        }
-        return;
-      }
-
-      // attach stream and play
-      streamRef.current = stream;
-      video.srcObject = stream;
-      try {
-        await video.play();
-      } catch (err) {
-        console.warn("video.play() failed:", err);
-      }
-
-      // Prefer using MediaPipe Camera util if available, but handle errors from .start()
-      if (window.Camera) {
-        try {
-          cameraRef.current = new window.Camera(video, {
-            onFrame: async () => {
-              if (!handsRef.current) return;
-              try {
-                await handsRef.current.send({ image: video });
-              } catch (err) {
-                // ignore per-frame send errors
-              }
-            },
-            width: 1280,
-            height: 720,
-          });
-
-          await cameraRef.current.start();
-          startFpsTimer();
-          setIsRunning(true);
-          setStatus("Camera running");
-          return;
-        } catch (err) {
-          console.error("Camera util start error:", err);
-          // fallback to manual loop using stream/video element
-        }
-      }
-
-      // Fallback: manually loop frames from the video element
-      startManualLoop();
-      startFpsTimer();
-      setIsRunning(true);
-      setStatus("Camera running (manual loop)");
-    } catch (err) {
-      console.error("Start error:", err);
-      setStatus(`Failed to start camera: ${err && err.message ? err.message : String(err)}`);
-    }
-  }
-
-  // stop camera and cleanup
-  function stop() {
-    setIsRunning(false);
-    setStatus("Stopping...");
-
-    try {
-      // stop MediaPipe camera util
-      if (cameraRef.current && typeof cameraRef.current.stop === "function") {
-        try { cameraRef.current.stop(); } catch (err) { /* ignore */ }
-        cameraRef.current = null;
-      }
-
-      // stop manual loop
-      stopManualLoop();
-
-      // stop stream tracks
-      if (streamRef.current) {
-        try {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-        } catch (err) {}
-        streamRef.current = null;
-      }
-
-      // cleanup hands
-      if (handsRef.current) {
-        try { handsRef.current.onResults(null); } catch (err) {}
-        handsRef.current = null;
-      }
-
-      stopFpsTimer();
-
-      setFingerCount(0);
-      setHandCount(0);
-      setStatus("Stopped");
-
-      // clear canvas
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    } catch (err) {
-      console.error("Stop error:", err);
-    }
-  }
-
-  // Allow user to upload a video file to use as input (fallback)
-  function onFilePicked(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const video = videoRef.current;
-    video.srcObject = null;
-    video.src = url;
-    video.loop = true;
-    setUseVideoFile(true);
-    setStatus("Uploaded video ready — press Start to process it");
-  }
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stop();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-6">
-      <div className="max-w-5xl w-full bg-white rounded-2xl shadow-xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left: Video + Canvas */}
-        <div className="md:col-span-2 rounded-lg overflow-hidden relative bg-black">
-          <video
-            ref={videoRef}
-            className="w-full h-auto object-cover bg-black"
-            playsInline
-            muted
-            style={{ transform: "scaleX(-1)" }}
-          />
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ transform: "scaleX(-1)" }}
-          />
-
-          <div className="absolute left-4 top-4 bg-white/60 backdrop-blur rounded-lg px-3 py-2 text-sm">
-            <div className="font-medium">Status</div>
-            <div className="text-xs">{status}</div>
-          </div>
-        </div>
-
-        {/* Right: Controls & stats */}
-        <div className="flex flex-col gap-4">
-          <div className="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-xl shadow-inner">
-            <div className="text-xs uppercase text-slate-500">Statistics</div>
-            <div className="flex items-center justify-between mt-2">
-              <div>
-                <div className="text-2xl font-semibold">{fingerCount}</div>
-                <div className="text-xs text-slate-500">Total fingers</div>
-              </div>
-              <div className="text-right">
-                <div className="text-2xl font-semibold">{handCount}</div>
-                <div className="text-xs text-slate-500">Hands</div>
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center gap-3">
-              <div className="px-3 py-2 bg-white rounded-md shadow">FPS: <span className="font-medium">{fps}</span></div>
-              <div className="px-3 py-2 bg-white rounded-md shadow">Running: <span className="font-medium">{isRunning ? 'Yes' : 'No'}</span></div>
-            </div>
-          </div>
-
-          <div className="p-4 bg-white rounded-xl border border-slate-100">
-            <div className="flex flex-col gap-3">
-              <input type="file" accept="video/*" onChange={onFilePicked} />
-
-              <button
-                onClick={start}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg transition"
-                disabled={isRunning}
-              >
-                Start Camera / Process Video
-              </button>
-
-              <button
-                onClick={stop}
-                className="w-full bg-white border border-slate-200 py-2 rounded-lg hover:bg-slate-50 transition"
-                disabled={!isRunning}
-              >
-                Stop
-              </button>
-
-              <button
-                onClick={() => {
-                  // Screenshot of canvas (merged with video image)
-                  const canvas = canvasRef.current;
-                  if (!canvas) return;
-                  const link = document.createElement('a');
-                  link.download = `handtracker_${Date.now()}.png`;
-                  link.href = canvas.toDataURL('image/png');
-                  link.click();
-                }}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg transition"
-              >
-                Save Screenshot
-              </button>
-
-              <div className="text-xs text-slate-500 mt-2">Tips: Pastikan membuka lewat HTTPS / localhost. Jika permission kamera diblokir, cek pengaturan browser. Jika lingkungan (sandbox) tidak mengizinkan kamera, gunakan video lokal yang diunggah.</div>
-            </div>
-          </div>
-
-          <div className="text-xs text-slate-400">
-            Built with MediaPipe Hands (CDN). For production, consider bundling the package via npm and optimizing modelComplexity.
-          </div>
-        </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hand Tracker - Modern UI + FPS (HTML Version)</title>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- MediaPipe CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <style>
+    video, canvas { transform: scaleX(-1); }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-gray-100 to-white min-h-screen p-6">
+  <div class="max-w-6xl mx-auto bg-white rounded-2xl shadow-xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+
+    <!-- Video + Canvas Area -->
+    <div class="md:col-span-2 relative bg-black rounded-xl overflow-hidden">
+      <video id="video" class="w-full h-auto bg-black" playsinline muted></video>
+      <canvas id="canvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+
+      <div id="statusBox" class="absolute top-4 left-4 bg-white/70 backdrop-blur px-3 py-2 rounded-lg text-sm">
+        <div class="font-medium">Status:</div>
+        <div id="statusText" class="text-xs">Idle</div>
       </div>
     </div>
-  );
-}
+
+    <!-- Controls -->
+    <div class="flex flex-col gap-4">
+
+      <div class="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-xl shadow-inner">
+        <div class="text-xs uppercase text-gray-500">Statistics</div>
+        <div class="flex justify-between mt-2">
+          <div>
+            <div id="fingerCount" class="text-2xl font-semibold">0</div>
+            <div class="text-xs text-gray-500">Total Fingers</div>
+          </div>
+          <div class="text-right">
+            <div id="handCount" class="text-2xl font-semibold">0</div>
+            <div class="text-xs text-gray-500">Hands</div>
+          </div>
+        </div>
+        <div class="mt-3 flex gap-3">
+          <div class="px-3 py-2 bg-white shadow rounded-md">FPS: <span id="fpsDisplay">0</span></div>
+        </div>
+      </div>
+
+      <div class="p-4 bg-white border border-gray-200 rounded-xl flex flex-col gap-3">
+        <input type="file" id="videoFile" accept="video/*" class="text-sm" />
+
+        <button id="startBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg">Start Camera / Video</button>
+        <button id="stopBtn" class="w-full bg-white border border-gray-300 py-2 rounded-lg hover:bg-gray-50">Stop</button>
+        <button id="shotBtn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg">Save Screenshot</button>
+
+        <p class="text-xs text-gray-500">Tips: Gunakan HTTPS/localhost agar kamera dapat diakses. Jika kamera tidak bisa, unggah video sebagai alternatif.</p>
+      </div>
+
+      <p class="text-xs text-gray-400">MediaPipe Hands via CDN. Version: HTML Standalone.</p>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const statusText = document.getElementById("statusText");
+    const fingerCountEl = document.getElementById("fingerCount");
+    const handCountEl = document.getElementById("handCount");
+    const fpsDisplay = document.getElementById("fpsDisplay");
+
+    let useVideoFile = false;
+    let fpsInterval = null;
+    let lastTime = performance.now();
+    let frames = 0;
+
+    function updateStatus(msg) {
+      statusText.textContent = msg;
+    }
+
+    function startFPS() {
+      lastTime = performance.now();
+      frames = 0;
+      fpsInterval = setInterval(() => {
+        const now = performance.now();
+        const fps = frames / ((now - lastTime) / 1000);
+        fpsDisplay.textContent = Math.round(fps);
+        lastTime = now;
+        frames = 0;
+      }, 800);
+    }
+
+    function stopFPS() {
+      clearInterval(fpsInterval);
+      fpsInterval = null;
+      fpsDisplay.textContent = 0;
+    }
+
+    function countFingers(landmarks, hand) {
+      const tips = [4, 8, 12, 16, 20];
+      let count = 0;
+
+      for (let i = 1; i <= 4; i++) {
+        if (landmarks[tips[i]].y < landmarks[tips[i] - 2].y) count++;
+      }
+
+      const thumbTip = landmarks[4];
+      const thumbIp = landmarks[3];
+      if (hand === "Right" && thumbTip.x < thumbIp.x) count++;
+      if (hand === "Left" && thumbTip.x > thumbIp.x) count++;
+
+      return count;
+    }
+
+    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1 });
+
+    hands.onResults(results => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      let total = 0;
+
+      if (results.multiHandLandmarks) {
+        results.multiHandLandmarks.forEach((lm, i) => {
+          drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
+          drawLandmarks(ctx, lm, { color: '#FF0000', lineWidth: 1 });
+
+          const handLabel = results.multiHandedness[i].label;
+          total += countFingers(lm, handLabel);
+        });
+      }
+
+      handCountEl.textContent = results.multiHandLandmarks?.length || 0;
+      fingerCountEl.textContent = total;
+
+      frames++;
+    });
+
+    // Start Button
+    document.getElementById("startBtn").onclick = async () => {
+      updateStatus("Starting...");
+
+      const file = document.getElementById("videoFile").files[0];
+      if (file) {
+        useVideoFile = true;
+        video.src = URL.createObjectURL(file);
+        video.loop = true;
+        await video.play();
+        updateStatus("Processing uploaded video...");
+        loop();
+        startFPS();
+        return;
+      }
+
+      useVideoFile = false;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        await video.play();
+        updateStatus("Camera running...");
+
+        const camera = new Camera(video, {
+          onFrame: async () => { await hands.send({ image: video }); },
+          width: 1280,
+          height: 720
+        });
+
+        await camera.start();
+        startFPS();
+      } catch (err) {
+        updateStatus("Camera error: " + err.message);
+      }
+    };
+
+    function loop() {
+      hands.send({ image: video });
+      requestAnimationFrame(loop);
+    }
+
+    // Stop Button
+    document.getElementById("stopBtn").onclick = () => {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      video.pause();
+      stopFPS();
+      updateStatus("Stopped");
+    };
+
+    // Screenshot
+    document.getElementById("shotBtn").onclick = () => {
+      const link = document.createElement('a');
+      link.download = `handtracker_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    };
+  </script>
+</body>
+</html>
